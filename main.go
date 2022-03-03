@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,12 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.0.0"
+	AppVersion = "v1.0.2"
 )
 
 var (
@@ -210,7 +212,7 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer, HTTPDNSResolve string) ([]net.IP, erro
 		}()
 		if PeerInfo.CountryCode == "CN" {
 			u := url.URL{
-				Scheme: "ws",
+				Scheme: "wss",
 				Host: func() string {
 					if HTTPDNSSupport != "" {
 						RealHost, DialPort, err := net.SplitHostPort(PeerInfo.Host)
@@ -228,7 +230,23 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer, HTTPDNSResolve string) ([]net.IP, erro
 				}(),
 				Path: "/ws",
 			}
-			Conn, _, err := websocket.DefaultDialer.Dial(u.String(), func() http.Header {
+			WebSocketDialer := websocket.Dialer{
+				Proxy:            http.ProxyFromEnvironment,
+				HandshakeTimeout: 30 * time.Second,
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: false,
+					ServerName: func() string {
+						HostReal, _, err := net.SplitHostPort(PeerInfo.Host)
+						if err != nil {
+							return PeerInfo.Host
+						} else {
+							return HostReal
+						}
+					}(),
+				},
+			}
+			HTTPRequest := func() http.Header {
+				RequestHttpHeader := make(map[string][]string)
 				if HTTPDNSSupport != "" {
 					RealHost, _, err := net.SplitHostPort(u.Host)
 					if err != nil {
@@ -237,13 +255,23 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer, HTTPDNSResolve string) ([]net.IP, erro
 					if TransToIP := net.ParseIP(RealHost); TransToIP == nil {
 						return nil
 					}
-					RequestHttpHeader := make(map[string][]string)
 					RequestHttpHeader["Host"] = []string{RealHost}
-					return RequestHttpHeader
-				} else {
-					return nil
 				}
-			}())
+				RequestHttpHeader["Accept-Encoding"] = []string{"gzip,deflate,br"}
+				RequestHttpHeader["Accept-Language"] = []string{"zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"}
+				RequestHttpHeader["Cache-Control"] = []string{"no-cache"}
+				RequestHttpHeader["Origin"] = []string{"https://www.speedtest.net"}
+				RequestHttpHeader["Host"] = []string{PeerInfo.Host}
+				RequestHttpHeader["Pragma"] = []string{"no-cache"}
+				RequestHttpHeader["User-Agent"] = []string{`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36 Edg/98.0.1108.62`}
+				RequestHttpHeader["Dnt"] = []string{"1"}
+				if len(RequestHttpHeader) == 0 {
+					return nil
+				} else {
+					return RequestHttpHeader
+				}
+			}()
+			Conn, _, err := WebSocketDialer.Dial(u.String(), HTTPRequest)
 			if err != nil {
 				return
 			}
