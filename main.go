@@ -21,7 +21,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.0.5"
+	AppVersion = "v1.0.6"
 )
 
 var (
@@ -144,10 +144,9 @@ func OoklaGetIPFull(Num uint, LocalIP, HTTPDNSSupport string) ([]net.IP, error) 
 			OoklaCacheTag.Mu.Unlock()
 			if CacheFlushTag {
 				PeerList, err = OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
-				if err != nil {
-					return nil, err
+				if err == nil {
+					OoklaCacheGroup.List = PeerList
 				}
-				OoklaCacheGroup.List = PeerList
 			} else {
 				PeerList = OoklaCacheGroup.List
 			}
