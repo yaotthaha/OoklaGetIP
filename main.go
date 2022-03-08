@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +21,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.0.2"
+	AppVersion = "v1.0.3"
 )
 
 var (
@@ -83,7 +84,9 @@ func SampleHTTPServer(ListenAddr, ListenPort, Path string) error {
 			w.WriteHeader(503)
 			return
 		}
-		DataJson, err := json.Marshal(Data)
+		DataStr := SliceTranIPToStr(&Data)
+		sort.Strings(DataStr)
+		DataJson, err := json.Marshal(DataStr)
 		if err != nil {
 			w.WriteHeader(503)
 			return
@@ -213,24 +216,29 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer, HTTPDNSResolve string) ([]net.IP, erro
 		if PeerInfo.CountryCode == "CN" {
 			u := url.URL{
 				Scheme: "wss",
-				Host: func() string {
+				Host:   PeerInfo.Host,
+				Path:   "/ws",
+			}
+			WebSocketDialer := websocket.Dialer{
+				NetDial: func(network, addr string) (net.Conn, error) {
 					if HTTPDNSSupport != "" {
 						RealHost, DialPort, err := net.SplitHostPort(PeerInfo.Host)
 						if err != nil {
-							return PeerInfo.Host
+							return nil, err
 						}
 						ResolveIP, err := HTTPDNSResolveFunc(RealHost, HTTPDNSSupport)
 						if err != nil {
-							return PeerInfo.Host
+							return nil, err
 						}
-						return net.JoinHostPort(ResolveIP.String(), DialPort)
+						Conn, err := net.Dial(network, net.JoinHostPort(ResolveIP.String(), DialPort))
+						if err != nil {
+							return nil, err
+						}
+						return Conn, nil
 					} else {
-						return PeerInfo.Host
+						return net.Dial(network, addr)
 					}
-				}(),
-				Path: "/ws",
-			}
-			WebSocketDialer := websocket.Dialer{
+				},
 				Proxy:            http.ProxyFromEnvironment,
 				HandshakeTimeout: 30 * time.Second,
 				TLSClientConfig: &tls.Config{
@@ -322,4 +330,12 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer, HTTPDNSResolve string) ([]net.IP, erro
 		}
 	}()
 	return IPSliceReal, nil
+}
+
+func SliceTranIPToStr(IPSlice *[]net.IP) []string {
+	StrSlice := make([]string, 0)
+	for _, v := range *IPSlice {
+		StrSlice = append(StrSlice, v.String())
+	}
+	return StrSlice
 }
