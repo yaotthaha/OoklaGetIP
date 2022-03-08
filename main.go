@@ -21,7 +21,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.0.4"
+	AppVersion = "v1.0.5"
 )
 
 var (
@@ -49,14 +49,16 @@ func main() {
 		Mu      uint
 		Port    uint64
 		LocalIP string
+		NoCache bool
 	}{}
 	flag.BoolVar(&Params.Version, "v", false, "Show Version")
 	flag.BoolVar(&Params.Help, "h", false, "Show Help")
 	flag.UintVar(&Params.Mu, "mu", 1, "Multiple Exports")
 	flag.Uint64Var(&Params.Port, "p", 9012, "Http Server Listen Port")
 	flag.StringVar(&Params.LocalIP, "ip", "1.2.4.8", "Local IP")
-	flag.BoolVar(&CacheMode, "cache", true, "Cache Peer List")
+	flag.BoolVar(&Params.NoCache, "nc", false, "No Cache Peer List")
 	flag.Parse()
+	CacheMode = !Params.NoCache
 	if Params.Help {
 		flag.Usage()
 		return
