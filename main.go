@@ -21,8 +21,14 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.0.6"
+	AppVersion = "v1.1.0"
 )
+
+type OoklaPeer struct {
+	Url       string
+	Host      string
+	IPAndPort string
+}
 
 var (
 	OoklaCacheGroup struct {
@@ -36,7 +42,6 @@ var (
 )
 
 var (
-	HTTPDNS   = "223.5.5.5"
 	PeerNum   = 15
 	LocalIP   = "1.2.4.8"
 	CacheMode = true
@@ -110,7 +115,7 @@ func CacheModule() {
 
 func SampleHTTPServer(ListenAddr, ListenPort, Path string) error {
 	http.HandleFunc(Path, func(w http.ResponseWriter, r *http.Request) {
-		Data, err := OoklaGetIPFull(uint(PeerNum), LocalIP, HTTPDNS)
+		Data, err := OoklaGetIPFull(uint(PeerNum), LocalIP)
 		if err != nil {
 			w.WriteHeader(503)
 			return
@@ -128,7 +133,7 @@ func SampleHTTPServer(ListenAddr, ListenPort, Path string) error {
 	return http.ListenAndServe(net.JoinHostPort(ListenAddr, ListenPort), nil)
 }
 
-func OoklaGetIPFull(Num uint, LocalIP, HTTPDNSSupport string) ([]net.IP, error) {
+func OoklaGetIPFull(Num uint, LocalIP string) ([]net.IP, error) {
 	var (
 		PeerList []OoklaPeer
 		err      error
@@ -143,7 +148,7 @@ func OoklaGetIPFull(Num uint, LocalIP, HTTPDNSSupport string) ([]net.IP, error) 
 			}
 			OoklaCacheTag.Mu.Unlock()
 			if CacheFlushTag {
-				PeerList, err = OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
+				PeerList, err = OoklaGetAllPeer(Num, LocalIP)
 				if err == nil {
 					OoklaCacheGroup.List = PeerList
 				}
@@ -151,7 +156,7 @@ func OoklaGetIPFull(Num uint, LocalIP, HTTPDNSSupport string) ([]net.IP, error) 
 				PeerList = OoklaCacheGroup.List
 			}
 		} else {
-			PeerList, err = OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
+			PeerList, err = OoklaGetAllPeer(Num, LocalIP)
 			if err != nil {
 				return nil, err
 			}
@@ -159,20 +164,16 @@ func OoklaGetIPFull(Num uint, LocalIP, HTTPDNSSupport string) ([]net.IP, error) 
 		}
 		OoklaCacheGroup.Mu.Unlock()
 	} else {
-		PeerList, err = OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
+		PeerList, err = OoklaGetAllPeer(Num, LocalIP)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return OoklaGetAllIP(&PeerList, HTTPDNSSupport)
+	return OoklaGetAllIP(&PeerList)
 }
 
-type OoklaPeer struct {
-	Host        string `json:"host"`
-	CountryCode string `json:"cc"`
-}
-
-func HTTPDNSResolveFunc(Host, DNSIP string) (net.IP, error) {
+func HTTPDNSResolveFunc(Host string) (net.IP, error) {
+	DNSIP := `223.5.5.5`
 	HostReal, _, err := net.SplitHostPort(Host)
 	if err != nil {
 		if !strings.Contains(err.Error(), "missing port in address") {
@@ -212,7 +213,7 @@ func URLGen(Scheme, Host, Path string, Query map[string]string) string {
 	return URL.String()
 }
 
-func OoklaGetAllPeer(Num uint, LocalIP, HTTPDNSResolve string) ([]OoklaPeer, error) {
+func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 	PeerGetURL := `https://www.speedtest.net/api/js/servers`
 	PeerGetURLQuery := make(map[string]string)
 	PeerGetURLQuery["engine"] = "js"
@@ -245,127 +246,149 @@ func OoklaGetAllPeer(Num uint, LocalIP, HTTPDNSResolve string) ([]OoklaPeer, err
 	if err != nil {
 		return nil, err
 	}
-	if HTTPDNSResolve != "" {
-		IP, err := HTTPDNSResolveFunc(PeerGetURLParse.Host, HTTPDNS)
-		if err != nil {
-			return nil, err
-		}
-		req.RemoteAddr = IP.String()
+	IP, err := HTTPDNSResolveFunc(PeerGetURLParse.Host)
+	if err != nil {
+		return nil, err
 	}
+	req.RemoteAddr = net.JoinHostPort(IP.String(), "443")
 	client := http.Client{}
 	resp, err := client.Do(req)
 	bufData := make([]byte, 20480)
 	Len, _ := resp.Body.Read(bufData)
 	ListRaw := bufData[:Len]
-	var PeerList []OoklaPeer
-	err = json.Unmarshal(ListRaw, &PeerList)
+	type PeerListRawStruct struct {
+		Host        string `json:"host"`
+		CountryCode string `json:"cc"`
+	}
+	var PeerListRaw []PeerListRawStruct
+	err = json.Unmarshal(ListRaw, &PeerListRaw)
 	if err != nil {
 		return nil, err
+	}
+	PeerList := make([]OoklaPeer, 0)
+	PeerListChan := make(chan OoklaPeer, len(PeerListRaw))
+	ResolvePeerIP := func(PeerInfo PeerListRawStruct) (OoklaPeer, error) {
+		if PeerInfo.CountryCode != "CN" {
+			return OoklaPeer{}, errors.New("not in china")
+		} else {
+			Host, Port, err := net.SplitHostPort(PeerInfo.Host)
+			if err != nil {
+				return OoklaPeer{}, err
+			}
+			ResolveIP, err := HTTPDNSResolveFunc(Host)
+			if err != nil {
+				return OoklaPeer{}, err
+			}
+			u := &url.URL{
+				Scheme: "wss",
+				Host:   PeerInfo.Host,
+				Path:   "/ws",
+			}
+			return OoklaPeer{
+				Url:       u.String(),
+				Host:      Host,
+				IPAndPort: net.JoinHostPort(ResolveIP.String(), Port),
+			}, nil
+		}
+	}
+	var wg sync.WaitGroup
+	for _, v := range PeerListRaw {
+		wg.Add(1)
+		go func(Value PeerListRawStruct) {
+			defer wg.Done()
+			TempInfo, err := ResolvePeerIP(Value)
+			if err != nil {
+				return
+			}
+			PeerListChan <- TempInfo
+		}(v)
+	}
+	wg.Wait()
+	for {
+		BreakTag := false
+		select {
+		case Data := <-PeerListChan:
+			PeerList = append(PeerList, Data)
+		default:
+			BreakTag = true
+		}
+		if BreakTag {
+			break
+		}
 	}
 	return PeerList, nil
 }
 
-func OoklaGetAllIP(PeerList *[]OoklaPeer, HTTPDNSResolve string) ([]net.IP, error) {
+func OoklaGetAllIP(PeerList *[]OoklaPeer) ([]net.IP, error) {
 	if len(*PeerList) <= 0 {
 		return nil, errors.New("PeerList is nil")
 	}
 	var wg sync.WaitGroup
 	IPGetChannel := make(chan net.IP, len(*PeerList))
-	GetIPDO := func(PeerInfo OoklaPeer, HTTPDNSSupport string) {
+	GetIPDO := func(PeerInfo OoklaPeer) {
 		defer func() {
 			wg.Done()
 		}()
-		if PeerInfo.CountryCode == "CN" {
-			u := url.URL{
-				Scheme: "wss",
-				Host:   PeerInfo.Host,
-				Path:   "/ws",
-			}
-			WebSocketDialer := websocket.Dialer{
-				NetDial: func(network, addr string) (net.Conn, error) {
-					if HTTPDNSSupport != "" {
-						RealHost, DialPort, err := net.SplitHostPort(PeerInfo.Host)
-						if err != nil {
-							return nil, err
-						}
-						ResolveIP, err := HTTPDNSResolveFunc(RealHost, HTTPDNSSupport)
-						if err != nil {
-							return nil, err
-						}
-						Conn, err := net.Dial(network, net.JoinHostPort(ResolveIP.String(), DialPort))
-						if err != nil {
-							return nil, err
-						}
-						return Conn, nil
-					} else {
-						return net.Dial(network, addr)
-					}
-				},
-				Proxy:            http.ProxyFromEnvironment,
-				HandshakeTimeout: 30 * time.Second,
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: false,
-					ServerName: func() string {
-						HostReal, _, err := net.SplitHostPort(PeerInfo.Host)
-						if err != nil {
-							return PeerInfo.Host
-						} else {
-							return HostReal
-						}
-					}(),
-				},
-			}
-			HTTPRequest := func() http.Header {
-				RequestHttpHeader := make(map[string][]string)
-				if HTTPDNSSupport != "" {
-					RealHost, _, err := net.SplitHostPort(u.Host)
-					if err != nil {
-						return nil
-					}
-					if TransToIP := net.ParseIP(RealHost); TransToIP == nil {
-						return nil
-					}
-					RequestHttpHeader["Host"] = []string{RealHost}
+		u := url.URL{
+			Scheme: "wss",
+			Host:   PeerInfo.Host,
+			Path:   "/ws",
+		}
+		WebSocketDialer := websocket.Dialer{
+			NetDial: func(network, addr string) (net.Conn, error) {
+				Conn, err := net.Dial(network, PeerInfo.IPAndPort)
+				if err != nil {
+					return nil, err
 				}
-				RequestHttpHeader["Accept-Encoding"] = []string{"gzip,deflate,br"}
-				RequestHttpHeader["Accept-Language"] = []string{"zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"}
-				RequestHttpHeader["Cache-Control"] = []string{"no-cache"}
-				RequestHttpHeader["Origin"] = []string{"https://www.speedtest.net"}
-				RequestHttpHeader["Host"] = []string{PeerInfo.Host}
-				RequestHttpHeader["Pragma"] = []string{"no-cache"}
-				RequestHttpHeader["User-Agent"] = []string{`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36 Edg/98.0.1108.62`}
-				RequestHttpHeader["Dnt"] = []string{"1"}
-				if len(RequestHttpHeader) == 0 {
-					return nil
-				} else {
-					return RequestHttpHeader
-				}
-			}()
-			Conn, _, err := WebSocketDialer.Dial(u.String(), HTTPRequest)
-			if err != nil {
-				return
+				return Conn, nil
+			},
+			Proxy:            http.ProxyFromEnvironment,
+			HandshakeTimeout: 30 * time.Second,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: false,
+				ServerName:         PeerInfo.Host,
+			},
+		}
+		HTTPRequest := func() http.Header {
+			RequestHttpHeader := make(map[string][]string)
+			RequestHttpHeader["Accept-Encoding"] = []string{"gzip,deflate,br"}
+			RequestHttpHeader["Accept-Language"] = []string{"zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"}
+			RequestHttpHeader["Cache-Control"] = []string{"no-cache"}
+			RequestHttpHeader["Origin"] = []string{"https://www.speedtest.net"}
+			RequestHttpHeader["Host"] = []string{PeerInfo.Host}
+			RequestHttpHeader["Pragma"] = []string{"no-cache"}
+			RequestHttpHeader["User-Agent"] = []string{`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36 Edg/98.0.1108.62`}
+			RequestHttpHeader["Dnt"] = []string{"1"}
+			if len(RequestHttpHeader) == 0 {
+				return nil
+			} else {
+				return RequestHttpHeader
 			}
-			defer func(Conn *websocket.Conn) {
-				_ = Conn.Close()
-			}(Conn)
-			err = Conn.WriteMessage(websocket.TextMessage, []byte("GETIP"))
-			if err != nil {
-				return
-			}
-			_, messageDataByte, err := Conn.ReadMessage()
-			if err != nil {
-				return
-			}
-			IPString := strings.ReplaceAll(strings.Split(string(messageDataByte), " ")[1], "\n", "")
-			IP := net.ParseIP(IPString)
-			if IP != nil {
-				IPGetChannel <- IP
-			}
+		}()
+		Conn, _, err := WebSocketDialer.Dial(u.String(), HTTPRequest)
+		if err != nil {
+			return
+		}
+		defer func(Conn *websocket.Conn) {
+			_ = Conn.Close()
+		}(Conn)
+		err = Conn.WriteMessage(websocket.TextMessage, []byte("GETIP"))
+		if err != nil {
+			return
+		}
+		_, messageDataByte, err := Conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		IPString := strings.ReplaceAll(strings.Split(string(messageDataByte), " ")[1], "\n", "")
+		IP := net.ParseIP(IPString)
+		if IP != nil {
+			IPGetChannel <- IP
 		}
 	}
 	for _, v := range *PeerList {
 		wg.Add(1)
-		go GetIPDO(v, HTTPDNSResolve)
+		go GetIPDO(v)
 	}
 	wg.Wait()
 	IPSlice := make([]net.IP, 0)
