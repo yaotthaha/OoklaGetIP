@@ -21,13 +21,25 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.0.3"
+	AppVersion = "v1.0.4"
 )
 
 var (
-	HTTPDNS = "223.5.5.5"
-	PeerNum = 15
-	LocalIP = "1.2.4.8"
+	OoklaCacheGroup struct {
+		List []OoklaPeer
+		Mu   sync.Mutex
+	}
+	OoklaCacheTag struct {
+		Tag bool
+		Mu  sync.Mutex
+	}
+)
+
+var (
+	HTTPDNS   = "223.5.5.5"
+	PeerNum   = 15
+	LocalIP   = "1.2.4.8"
+	CacheMode = true
 )
 
 func main() {
@@ -43,6 +55,7 @@ func main() {
 	flag.UintVar(&Params.Mu, "mu", 1, "Multiple Exports")
 	flag.Uint64Var(&Params.Port, "p", 9012, "Http Server Listen Port")
 	flag.StringVar(&Params.LocalIP, "ip", "1.2.4.8", "Local IP")
+	flag.BoolVar(&CacheMode, "cache", true, "Cache Peer List")
 	flag.Parse()
 	if Params.Help {
 		flag.Usage()
@@ -73,8 +86,24 @@ func main() {
 		LocalIP = IPCheck.String()
 	}
 	fmt.Println(AppName + ` ` + AppVersion + ` (Build From ` + AppAuthor + `)`)
+	if CacheMode {
+		fmt.Println(`Cache Mode`)
+	}
 	fmt.Println(`Starting Server... Listen Port ` + strconv.FormatUint(Params.Port, 10))
+	if CacheMode {
+		go CacheModule()
+	}
 	log.Fatalln(SampleHTTPServer("::", strconv.FormatUint(Params.Port, 10), "/"))
+}
+
+func CacheModule() {
+	ticker := time.NewTicker(20 * time.Minute)
+	for {
+		<-ticker.C
+		OoklaCacheTag.Mu.Lock()
+		OoklaCacheTag.Tag = true
+		OoklaCacheTag.Mu.Unlock()
+	}
 }
 
 func SampleHTTPServer(ListenAddr, ListenPort, Path string) error {
@@ -98,9 +127,41 @@ func SampleHTTPServer(ListenAddr, ListenPort, Path string) error {
 }
 
 func OoklaGetIPFull(Num uint, LocalIP, HTTPDNSSupport string) ([]net.IP, error) {
-	PeerList, err := OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
-	if err != nil {
-		return nil, err
+	var (
+		PeerList []OoklaPeer
+		err      error
+	)
+	if CacheMode {
+		OoklaCacheGroup.Mu.Lock()
+		if len(OoklaCacheGroup.List) > 0 {
+			CacheFlushTag := false
+			OoklaCacheTag.Mu.Lock()
+			if OoklaCacheTag.Tag {
+				CacheFlushTag = true
+			}
+			OoklaCacheTag.Mu.Unlock()
+			if CacheFlushTag {
+				PeerList, err = OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
+				if err != nil {
+					return nil, err
+				}
+				OoklaCacheGroup.List = PeerList
+			} else {
+				PeerList = OoklaCacheGroup.List
+			}
+		} else {
+			PeerList, err = OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
+			if err != nil {
+				return nil, err
+			}
+			OoklaCacheGroup.List = PeerList
+		}
+		OoklaCacheGroup.Mu.Unlock()
+	} else {
+		PeerList, err = OoklaGetAllPeer(Num, LocalIP, HTTPDNSSupport)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return OoklaGetAllIP(&PeerList, HTTPDNSSupport)
 }
