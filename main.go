@@ -21,7 +21,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.1.0"
+	AppVersion = "v1.1.1"
 )
 
 type OoklaPeer struct {
@@ -222,7 +222,7 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 		PeerGetURLQuery["ip"] = LocalIP
 	}
 	if Num == 0 {
-		PeerGetURLQuery["limit"] = "15"
+		PeerGetURLQuery["limit"] = "1"
 	} else {
 		PeerGetURLQuery["limit"] = strconv.Itoa(int(Num))
 	}
