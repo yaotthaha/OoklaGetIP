@@ -21,7 +21,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.1.2"
+	AppVersion = "v1.1.3"
 )
 
 type OoklaPeer struct {
@@ -184,7 +184,16 @@ func OoklaGetIPFull(Num uint, LocalIP string) ([]net.IP, error) {
 			}
 		}
 	}
-	return OoklaGetAllIP(&PeerList)
+	IPList, err := OoklaGetAllIP(&PeerList)
+	if err != nil {
+		if len(IPCache) <= 0 {
+			return nil, err
+		} else {
+			return IPCache, nil
+		}
+	} else {
+		return IPList, nil
+	}
 }
 
 func HTTPDNSResolveFunc(Host string) (net.IP, error) {
