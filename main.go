@@ -21,7 +21,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.1.1"
+	AppVersion = "v1.1.2"
 )
 
 type OoklaPeer struct {
@@ -39,6 +39,7 @@ var (
 		Tag bool
 		Mu  sync.Mutex
 	}
+	IPCache []net.IP
 )
 
 var (
@@ -140,6 +141,7 @@ func OoklaGetIPFull(Num uint, LocalIP string) ([]net.IP, error) {
 	)
 	if CacheMode {
 		OoklaCacheGroup.Mu.Lock()
+		defer OoklaCacheGroup.Mu.Unlock()
 		if len(OoklaCacheGroup.List) > 0 {
 			CacheFlushTag := false
 			OoklaCacheTag.Mu.Lock()
@@ -151,6 +153,12 @@ func OoklaGetIPFull(Num uint, LocalIP string) ([]net.IP, error) {
 				PeerList, err = OoklaGetAllPeer(Num, LocalIP)
 				if err == nil {
 					OoklaCacheGroup.List = PeerList
+				} else {
+					if len(IPCache) <= 0 {
+						return nil, err
+					} else {
+						return IPCache, nil
+					}
 				}
 			} else {
 				PeerList = OoklaCacheGroup.List
@@ -158,15 +166,22 @@ func OoklaGetIPFull(Num uint, LocalIP string) ([]net.IP, error) {
 		} else {
 			PeerList, err = OoklaGetAllPeer(Num, LocalIP)
 			if err != nil {
-				return nil, err
+				if len(IPCache) <= 0 {
+					return nil, err
+				} else {
+					return IPCache, nil
+				}
 			}
 			OoklaCacheGroup.List = PeerList
 		}
-		OoklaCacheGroup.Mu.Unlock()
 	} else {
 		PeerList, err = OoklaGetAllPeer(Num, LocalIP)
 		if err != nil {
-			return nil, err
+			if len(IPCache) <= 0 {
+				return nil, err
+			} else {
+				return IPCache, nil
+			}
 		}
 	}
 	return OoklaGetAllIP(&PeerList)
@@ -185,7 +200,25 @@ func HTTPDNSResolveFunc(Host string) (net.IP, error) {
 	QueryMap := make(map[string]string)
 	QueryMap["name"] = HostReal
 	QueryMap["short"] = "1"
-	respDNS, err := http.Get(URLGen("https", DNSIP, "/resolve", QueryMap))
+	client := http.Client{
+		Timeout: 2 * time.Second,
+	}
+	req, _ := http.NewRequest(http.MethodGet, URLGen("https", DNSIP, "/resolve", QueryMap), nil)
+	var (
+		respDNS *http.Response
+		Num     int = 0
+	)
+	for {
+		respDNS, err = client.Do(req)
+		if err != nil {
+			Num++
+		} else {
+			break
+		}
+		if Num == 3 {
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -251,8 +284,25 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 		return nil, err
 	}
 	req.RemoteAddr = net.JoinHostPort(IP.String(), "443")
-	client := http.Client{}
-	resp, err := client.Do(req)
+	var resp *http.Response
+	client := http.Client{
+		Timeout: 3 * time.Second,
+	}
+	var RetryNum int = 0
+	for {
+		resp, err = client.Do(req)
+		if err != nil {
+			RetryNum++
+		} else {
+			break
+		}
+		if RetryNum == 3 {
+			break
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
 	bufData := make([]byte, 20480)
 	Len, _ := resp.Body.Read(bufData)
 	ListRaw := bufData[:Len]
@@ -316,6 +366,9 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 			break
 		}
 	}
+	if len(PeerList) <= 0 {
+		return nil, errors.New("peer list is nil")
+	}
 	return PeerList, nil
 }
 
@@ -343,7 +396,7 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer) ([]net.IP, error) {
 				return Conn, nil
 			},
 			Proxy:            http.ProxyFromEnvironment,
-			HandshakeTimeout: 30 * time.Second,
+			HandshakeTimeout: 3 * time.Second,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: false,
 				ServerName:         PeerInfo.Host,
@@ -404,6 +457,11 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer) ([]net.IP, error) {
 			break
 		}
 	}
+	if len(IPSlice) <= 0 {
+		if len(IPCache) > 0 {
+			return IPCache, nil
+		}
+	}
 	IPSliceReal := make([]net.IP, 0)
 	func() {
 		TempMap := make(map[string]int)
@@ -414,6 +472,7 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer) ([]net.IP, error) {
 			IPSliceReal = append(IPSliceReal, net.ParseIP(k))
 		}
 	}()
+	IPCache = IPSliceReal
 	return IPSliceReal, nil
 }
 
