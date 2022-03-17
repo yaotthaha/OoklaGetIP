@@ -21,7 +21,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.1.3"
+	AppVersion = "v1.1.4-build-1"
 )
 
 type OoklaPeer struct {
@@ -215,7 +215,7 @@ func HTTPDNSResolveFunc(Host string) (net.IP, error) {
 	req, _ := http.NewRequest(http.MethodGet, URLGen("https", DNSIP, "/resolve", QueryMap), nil)
 	var (
 		respDNS *http.Response
-		Num     int = 0
+		Num     = 0
 	)
 	for {
 		respDNS, err = client.Do(req)
@@ -295,9 +295,14 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 	req.RemoteAddr = net.JoinHostPort(IP.String(), "443")
 	var resp *http.Response
 	client := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
 		Timeout: 3 * time.Second,
 	}
-	var RetryNum int = 0
+	var RetryNum = 0
 	for {
 		resp, err = client.Do(req)
 		if err != nil {
@@ -407,7 +412,7 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer) ([]net.IP, error) {
 			Proxy:            http.ProxyFromEnvironment,
 			HandshakeTimeout: 3 * time.Second,
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: false,
+				InsecureSkipVerify: true,
 				ServerName:         PeerInfo.Host,
 			},
 		}
