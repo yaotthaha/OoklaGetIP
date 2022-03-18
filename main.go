@@ -21,11 +21,10 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.1.4-build-1"
+	AppVersion = "v1.1.5"
 )
 
 type OoklaPeer struct {
-	Url       string
 	Host      string
 	IPAndPort string
 }
@@ -43,19 +42,23 @@ var (
 )
 
 var (
-	PeerNum   = 15
-	LocalIP   = "1.2.4.8"
-	CacheMode = true
+	PeerNum       = 15
+	LocalIP       = "1.2.4.8"
+	CacheMode     = true
+	TLS           bool
+	SkipTLSVerify bool
 )
 
 func main() {
 	var Params = struct {
-		Version bool
-		Help    bool
-		Mu      uint
-		Port    uint64
-		LocalIP string
-		NoCache bool
+		Version       bool
+		Help          bool
+		Mu            uint
+		Port          uint64
+		LocalIP       string
+		NoCache       bool
+		TLS           bool
+		SkipTLSVerify bool
 	}{}
 	flag.BoolVar(&Params.Version, "v", false, "Show Version")
 	flag.BoolVar(&Params.Help, "h", false, "Show Help")
@@ -63,8 +66,12 @@ func main() {
 	flag.Uint64Var(&Params.Port, "p", 9012, "Http Server Listen Port")
 	flag.StringVar(&Params.LocalIP, "ip", "1.2.4.8", "Local IP")
 	flag.BoolVar(&Params.NoCache, "nc", false, "No Cache Peer List")
+	flag.BoolVar(&Params.TLS, "tls", false, "TLS Support")
+	flag.BoolVar(&Params.SkipTLSVerify, "k", false, "TLS Skip Verify")
 	flag.Parse()
 	CacheMode = !Params.NoCache
+	TLS = Params.TLS
+	SkipTLSVerify = Params.SkipTLSVerify
 	if Params.Help {
 		flag.Usage()
 		return
@@ -211,8 +218,25 @@ func HTTPDNSResolveFunc(Host string) (net.IP, error) {
 	QueryMap["short"] = "1"
 	client := http.Client{
 		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: func() *tls.Config {
+				if TLS {
+					if SkipTLSVerify {
+						return &tls.Config{
+							InsecureSkipVerify: true,
+						}
+					} else {
+						return &tls.Config{
+							InsecureSkipVerify: false,
+						}
+					}
+				} else {
+					return nil
+				}
+			}(),
+		},
 	}
-	req, _ := http.NewRequest(http.MethodGet, URLGen("https", DNSIP, "/resolve", QueryMap), nil)
+	req, _ := http.NewRequest(http.MethodGet, URLGen(DNSIP, "/resolve", QueryMap), nil)
 	var (
 		respDNS *http.Response
 		Num     = 0
@@ -239,11 +263,17 @@ func HTTPDNSResolveFunc(Host string) (net.IP, error) {
 	return IP, nil
 }
 
-func URLGen(Scheme, Host, Path string, Query map[string]string) string {
+func URLGen(Host, Path string, Query map[string]string) string {
 	URL := url.URL{
-		Scheme: Scheme,
-		Host:   Host,
-		Path:   Path,
+		Scheme: func() string {
+			if TLS {
+				return "https"
+			} else {
+				return "http"
+			}
+		}(),
+		Host: Host,
+		Path: Path,
 		RawQuery: strings.Join(func(QueryMap map[string]string) []string {
 			QuerySlice := make([]string, 0)
 			for k, v := range QueryMap {
@@ -256,7 +286,8 @@ func URLGen(Scheme, Host, Path string, Query map[string]string) string {
 }
 
 func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
-	PeerGetURL := `https://www.speedtest.net/api/js/servers`
+	PeerGetURLHost := `www.speedtest.net`
+	PeerGetURLPath := `/api/js/servers`
 	PeerGetURLQuery := make(map[string]string)
 	PeerGetURLQuery["engine"] = "js"
 	PeerGetURLQuery["https_functional"] = "true"
@@ -268,14 +299,10 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 	} else {
 		PeerGetURLQuery["limit"] = strconv.Itoa(int(Num))
 	}
-	PeerGetURLParse, err := url.Parse(PeerGetURL)
-	if err != nil {
-		return nil, err
-	}
 	u := url.URL{
-		Scheme: PeerGetURLParse.Scheme,
-		Host:   PeerGetURLParse.Host,
-		Path:   PeerGetURLParse.Path,
+		Scheme: "https",
+		Host:   PeerGetURLHost,
+		Path:   PeerGetURLPath,
 		RawQuery: func() string {
 			QueryStringSlice := make([]string, 0)
 			for k, v := range PeerGetURLQuery {
@@ -288,7 +315,7 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 	if err != nil {
 		return nil, err
 	}
-	IP, err := HTTPDNSResolveFunc(PeerGetURLParse.Host)
+	IP, err := HTTPDNSResolveFunc(PeerGetURLHost)
 	if err != nil {
 		return nil, err
 	}
@@ -296,9 +323,21 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 	var resp *http.Response
 	client := http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
+			TLSClientConfig: func() *tls.Config {
+				if u.Scheme == "https" {
+					if SkipTLSVerify {
+						return &tls.Config{
+							InsecureSkipVerify: true,
+						}
+					} else {
+						return &tls.Config{
+							InsecureSkipVerify: false,
+						}
+					}
+				} else {
+					return nil
+				}
+			}(),
 		},
 		Timeout: 3 * time.Second,
 	}
@@ -343,13 +382,7 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 			if err != nil {
 				return OoklaPeer{}, err
 			}
-			u := &url.URL{
-				Scheme: "wss",
-				Host:   PeerInfo.Host,
-				Path:   "/ws",
-			}
 			return OoklaPeer{
-				Url:       u.String(),
 				Host:      Host,
 				IPAndPort: net.JoinHostPort(ResolveIP.String(), Port),
 			}, nil
@@ -397,9 +430,15 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer) ([]net.IP, error) {
 			wg.Done()
 		}()
 		u := url.URL{
-			Scheme: "wss",
-			Host:   PeerInfo.Host,
-			Path:   "/ws",
+			Scheme: func() string {
+				if TLS {
+					return "wss"
+				} else {
+					return "ws"
+				}
+			}(),
+			Host: PeerInfo.Host,
+			Path: "/ws",
 		}
 		WebSocketDialer := websocket.Dialer{
 			NetDial: func(network, addr string) (net.Conn, error) {
@@ -411,10 +450,23 @@ func OoklaGetAllIP(PeerList *[]OoklaPeer) ([]net.IP, error) {
 			},
 			Proxy:            http.ProxyFromEnvironment,
 			HandshakeTimeout: 3 * time.Second,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-				ServerName:         PeerInfo.Host,
-			},
+			TLSClientConfig: func() *tls.Config {
+				if u.Scheme == "wss" {
+					if SkipTLSVerify {
+						return &tls.Config{
+							InsecureSkipVerify: true,
+							ServerName:         PeerInfo.Host,
+						}
+					} else {
+						return &tls.Config{
+							InsecureSkipVerify: false,
+							ServerName:         PeerInfo.Host,
+						}
+					}
+				} else {
+					return nil
+				}
+			}(),
 		}
 		HTTPRequest := func() http.Header {
 			RequestHttpHeader := make(map[string][]string)
