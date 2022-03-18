@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/gorilla/websocket"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -21,7 +22,7 @@ import (
 const (
 	AppName    = "OoklaGetIP"
 	AppAuthor  = "Yaott"
-	AppVersion = "v1.1.5"
+	AppVersion = "v1.1.5-fix-1"
 )
 
 type OoklaPeer struct {
@@ -255,10 +256,12 @@ func HTTPDNSResolveFunc(Host string) (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := make([]byte, 1024)
-	DataLength, _ := respDNS.Body.Read(buf)
+	DataRaw, err := ioutil.ReadAll(respDNS.Body)
+	if err != nil {
+		return nil, err
+	}
 	var Data []string
-	_ = json.Unmarshal(buf[:DataLength], &Data)
+	_ = json.Unmarshal(DataRaw, &Data)
 	IP := net.ParseIP(Data[0])
 	return IP, nil
 }
@@ -356,9 +359,10 @@ func OoklaGetAllPeer(Num uint, LocalIP string) ([]OoklaPeer, error) {
 	if err != nil {
 		return nil, err
 	}
-	bufData := make([]byte, 20480)
-	Len, _ := resp.Body.Read(bufData)
-	ListRaw := bufData[:Len]
+	ListRaw, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	type PeerListRawStruct struct {
 		Host        string `json:"host"`
 		CountryCode string `json:"cc"`
